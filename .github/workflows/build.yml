@@ -8,8 +8,6 @@ on:
 
   schedule:
 
-    # 每6小时检查一次上游更新
-
     - cron: "0 */6 * * *"
 
 
@@ -72,17 +70,18 @@ jobs:
 
           path: .upstream.sha
 
-          key: upstream-sha-${{ github.repository }}
+          key: upstream-sha-cache
 
           restore-keys: |
 
-            upstream-sha-${{ github.repository }}
+            upstream-sha-cache
 
 
 
 
 
       - name: Check upstream commit
+
 
         id: check
 
@@ -96,13 +95,8 @@ jobs:
 
 
           NEW_SHA=$(gh api \
-            repos/${SOURCE_REPO}/commits/main \
-            --jq '.sha')
-
-
-
-          echo "Current upstream SHA:"
-          echo "$NEW_SHA"
+          repos/${SOURCE_REPO}/commits/main \
+          --jq '.sha')
 
 
 
@@ -117,9 +111,12 @@ jobs:
 
 
 
-          echo "Previous SHA:"
-          echo "$OLD_SHA"
+          echo "Current:"
+          echo "$NEW_SHA"
 
+
+          echo "Previous:"
+          echo "$OLD_SHA"
 
 
 
@@ -141,8 +138,9 @@ jobs:
 
 
 
+
 # =====================================================
-# ARM64 构建
+# ARM64 Build
 # =====================================================
 
   build:
@@ -166,10 +164,9 @@ jobs:
     steps:
 
 
-      - name: Checkout repository
+      - name: Checkout
 
         uses: actions/checkout@v4
-
 
 
 
@@ -192,8 +189,7 @@ jobs:
 
 
 
-
-      - name: Setup Docker Buildx
+      - name: Setup Buildx
 
         uses: docker/setup-buildx-action@v3
 
@@ -202,6 +198,7 @@ jobs:
 
 
       - name: Prepare image name
+
 
         run: |
 
@@ -238,7 +235,7 @@ jobs:
 
 
 
-      - name: Build and Push ARM64 Image
+      - name: Build and Push ARM64
 
 
         uses: docker/build-push-action@v6
@@ -263,6 +260,9 @@ jobs:
 
             ${{ env.IMAGE_NAME }}:latest
 
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+
 
           cache-from: type=gha
 
@@ -275,7 +275,7 @@ jobs:
 
 
 # =====================================================
-# 清理旧资源
+# Cleanup
 # =====================================================
 
   cleanup:
@@ -294,11 +294,20 @@ jobs:
     steps:
 
 
-      # ---------------------------------
-      # 清理 GHCR 镜像版本
-      # ---------------------------------
+      # 等待 GHCR manifest 同步
 
-      - name: Cleanup old GHCR versions
+      - name: Wait GHCR sync
+
+        run: sleep 120
+
+
+
+
+
+
+      # 保留最近3个版本
+
+      - name: Cleanup GHCR versions
 
 
         uses: actions/delete-package-versions@v5
@@ -313,7 +322,10 @@ jobs:
           package-type: container
 
 
-          min-versions-to-keep: 1
+          min-versions-to-keep: 3
+
+
+          delete-only-untagged-versions: false
 
 
           token: ${{ github.token }}
@@ -324,14 +336,13 @@ jobs:
 
 
 
-      # ---------------------------------
-      # 清理旧 Actions runs
-      # ---------------------------------
+      # 清理 Actions 历史
 
-      - name: Cleanup old workflow runs
+      - name: Cleanup workflow runs
 
 
         env:
+
 
           GH_TOKEN: ${{ github.token }}
 
@@ -340,8 +351,8 @@ jobs:
 
 
           RUN_IDS=$(gh api \
-            repos/${{ github.repository }}/actions/workflows/build.yml/runs \
-            --jq '.workflow_runs[].id')
+          repos/${{ github.repository }}/actions/workflows/build.yml/runs \
+          --jq '.workflow_runs[].id')
 
 
 
@@ -349,22 +360,18 @@ jobs:
 
           do
 
-
             if [ "$RUN_ID" != "${{ github.run_id }}" ]
 
             then
 
-
-              echo "Delete workflow run: $RUN_ID"
-
+              echo "Delete run $RUN_ID"
 
 
               gh api \
-                --method DELETE \
-                repos/${{ github.repository }}/actions/runs/$RUN_ID
+              --method DELETE \
+              repos/${{ github.repository }}/actions/runs/$RUN_ID
 
 
             fi
-
 
           done
