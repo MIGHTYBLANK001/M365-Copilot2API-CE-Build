@@ -1,0 +1,278 @@
+name: Build M365-Copilot2API ARM64
+
+
+on:
+
+  # 手动执行
+  workflow_dispatch:
+
+
+  # 每6小时检查上游更新
+  schedule:
+
+    - cron: "0 */6 * * *"
+
+
+
+permissions:
+
+  contents: read
+
+  packages: write
+
+
+
+env:
+
+  SOURCE_REPO: s12ryt/M365-Copilot2API-CE
+
+
+
+jobs:
+
+
+  check-update:
+
+
+    runs-on: ubuntu-latest
+
+
+    outputs:
+
+      changed: ${{ steps.check.outputs.changed }}
+
+
+
+    steps:
+
+
+      - name: Checkout
+
+        uses: actions/checkout@v4
+
+
+
+      - name: Restore last commit cache
+
+        uses: actions/cache@v4
+
+        with:
+
+          path: .upstream_commit
+
+          key: upstream-commit-${{ github.run_id }}
+
+          restore-keys: |
+
+            upstream-commit-
+
+
+
+      - name: Check upstream update
+
+        id: check
+
+        run: |
+
+
+          git clone --depth=1 \
+          https://github.com/${SOURCE_REPO}.git source
+
+
+
+          cd source
+
+
+          NEW_COMMIT=$(git rev-parse HEAD)
+
+
+
+          OLD_COMMIT=""
+
+          if [ -f ../.upstream_commit ]; then
+
+            OLD_COMMIT=$(cat ../.upstream_commit)
+
+          fi
+
+
+
+          echo "Current: $NEW_COMMIT"
+
+          echo "Previous: $OLD_COMMIT"
+
+
+
+          if [ "$NEW_COMMIT" != "$OLD_COMMIT" ]; then
+
+            echo "changed=true" >> $GITHUB_OUTPUT
+
+          else
+
+            echo "changed=false" >> $GITHUB_OUTPUT
+
+          fi
+
+
+
+          cd ..
+
+
+
+          echo "$NEW_COMMIT" > .upstream_commit
+
+
+
+
+
+  build:
+
+
+    needs: check-update
+
+
+    # 手动执行强制编译
+    if: |
+
+      needs.check-update.outputs.changed == 'true'
+
+      || github.event_name == 'workflow_dispatch'
+
+
+
+    runs-on: ubuntu-latest
+
+
+
+    steps:
+
+
+      - name: Checkout
+
+        uses: actions/checkout@v4
+
+
+
+      - name: Clone source
+
+        run: |
+
+          git clone --depth=1 \
+          https://github.com/${SOURCE_REPO}.git source
+
+
+
+
+
+      - name: Setup QEMU
+
+        uses: docker/setup-qemu-action@v3
+
+
+
+      - name: Setup Docker Buildx
+
+        uses: docker/setup-buildx-action@v3
+
+
+
+
+
+      # 转换GHCR用户名为小写
+
+      - name: Prepare image name
+
+        run: |
+
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+
+          echo "IMAGE_NAME=ghcr.io/${OWNER}/m365-copilot2api" >> $GITHUB_ENV
+
+
+
+
+
+      - name: Login GHCR
+
+        uses: docker/login-action@v3
+
+        with:
+
+          registry: ghcr.io
+
+          username: ${{ github.actor }}
+
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+
+
+
+
+      - name: Build and Push ARM64
+
+        uses: docker/build-push-action@v6
+
+        with:
+
+
+          context: ./source
+
+
+          file: ./source/Dockerfile
+
+
+          platforms: linux/arm64
+
+
+          push: true
+
+
+          tags: |
+
+            ${{ env.IMAGE_NAME }}:latest
+
+
+
+      # 删除旧GHCR版本
+
+      - name: Cleanup old GHCR versions
+
+        uses: actions/delete-package-versions@v5
+
+        with:
+
+
+          package-name: m365-copilot2api
+
+
+          package-type: container
+
+
+          min-versions-to-keep: 1
+
+
+
+      # 删除旧Action记录
+
+      - name: Cleanup old workflow runs
+
+        env:
+
+          GH_TOKEN: ${{ github.token }}
+
+        run: |
+
+
+          gh run list \
+
+            --workflow build.yml \
+
+            --limit 100 \
+
+            --json databaseId \
+
+            --jq '.[].databaseId' \
+
+          | grep -v "${{ github.run_id }}" \
+
+          | xargs -r -n1 gh run delete
